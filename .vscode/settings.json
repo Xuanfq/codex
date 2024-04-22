@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "*.cjson": "jsonc",
+        "*.wxss": "css",
+        "*.wxs": "javascript",
+        "module.h": "c",
+        "device.h": "c",
+        "init.h": "c",
+        "bus.h": "c",
+        "kernel.h": "c",
+        "sysinfo.h": "c",
+        "const.h": "c",
+        "types.h": "c"
+    }
+}
