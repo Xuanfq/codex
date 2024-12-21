@@ -1,0 +1,3 @@
+[submodule "lang/verilog/iverilog_module"]
+	path = lang/verilog/iverilog_module
+	url = https://gitee.com/yuan_hp/iverilog_module.git

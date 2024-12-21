@@ -1,0 +1,312 @@
+#!/bin/bash
+#仿真脚本
+#by yunahp 2020/5/31
+#######################   仿真脚本   #######################
+
+#该脚本用于仿真模块，仿真时讲所需文件拷贝到sim文件夹，避免路径问题导致仿真失败。
+# clear 
+DIR=`dirname $0` #获取当前路径
+exdir=$(cat db.dat)
+cd $exdir
+#echo $exdir
+exdir=$(pwd)
+#echo $exdir
+exdir=${exdir##*/}
+#echo $exdir
+cd - &> /dev/null #回到上次目录
+
+
+if [ "$1" = "-unhide" ];then #显示所有隐藏的工程文件夹
+    if [ ! -d module ];then
+        echo -e "\033[36mERROR:不存在module 路径\033[0m"
+        exit 1
+    fi
+    cd module
+    dir=$(ls -al | awk '/^d/ {print $NF}')
+    for i in $dir
+    do 
+        if [ "$i" = "." ]   ;then
+            continue
+        fi
+
+        if [ "$i" = ".." ]   ;then
+            continue
+        fi
+          
+        dst=${i//./}
+        if [ "$i" != "$dst" ];then
+            mv $i $dst
+        fi
+    done 
+    echo -e "\033[36mINFO:已经显示隐藏的文件夹，请查看 module 路径下！\033[0m"
+    exit 0
+fi
+if [ "$1" = "-hide" ];then   #隐藏所有除正在调试的工程文件夹
+    if [ ! -d module ];then
+        echo -e "\033[36mERROR:不存在module 路径\033[0m"
+        exit 1
+    fi
+    cd module
+    dir=$(ls -l | awk '/^d/ {print $NF}')
+    for i in $dir
+    do 
+        if [ "$i" = "." ]   ;then
+            continue
+        fi
+
+        if [ "$i" = ".." ]   ;then
+            continue
+        fi
+        if [ "$i" = "$exdir" ]   ;then
+            continue
+        fi
+          
+        dst=".$i"
+        mv $i $dst 
+    done 
+    echo -e "\033[36mINFO:已经隐藏所有除正在调试的工程文件夹，请查看 module 路径下！\033[0m"
+    exit 0
+fi
+
+if [ "$1" = "-i" ];then #在指定路径生成testbech模板
+    clear
+    if [ ! -d $2 ];then
+        echo -e "\033[36mINFO:工程路径不存在！将创建工程！\033[0m"
+        mkdir -p $2
+    fi
+    cd $2
+    if [ -f tb.v ];then
+        echo "ERROR:初始化失败，路径 $2 中已存在tb.v文件！"
+        exit 0
+    fi
+cat <<EOF >tb.v
+\`timescale 1ns / 1ps
+module tb ;
+reg clk,rst;
+
+//生成始时钟
+parameter NCLK = 4;
+initial begin
+        clk=0;
+        forever clk=#(NCLK/2) ~clk; 
+end 
+
+/****************** 开始 ADD module inst ******************/
+
+/****************** 结束 END module inst ******************/
+
+initial begin
+    \$dumpfile("wave.lxt2");
+    \$dumpvars(0, tb);   //dumpvars(深度, 实例化模块1，实例化模块2，.....)
+end
+
+initial begin
+        rst = 1;
+        #(NCLK) rst=0;
+        #(NCLK) rst=1; //复位信号
+
+        repeat(100) @(posedge clk)begin
+
+        end
+        \$display("运行结束！");
+        \$dumpflush;
+        \$finish;
+        \$stop;
+end 
+endmodule
+EOF
+    echo -e "\033[36mINFO:已在$2下生成tb.v文件！\033[30"
+    exit 0
+fi 
+#=============================================================================
+if [ "$1" = "-clk" ];then #在指定路径生成任意分频器模板
+    clear
+    if [ ! -d $2 ];then
+        echo -e "\033[36mINFO:工程路径不存在！将创建工程！\033[0m"
+        mkdir -p $2
+    fi
+    cd $2
+    if [ -f divide.v ];then
+        echo "ERROR:生成失败，路径 $2 中已存在divide.v文件！"
+        exit 0
+    fi
+
+ cat<<EOF >divide.v
+\`timescale 1ns / 1ps
+// ********************************************************************
+//	FileName	: divide.v
+//	Author		：hpy
+//	Email		：yuan_hp@qq.com
+//	Date		：2020年06月18日
+//	Description	：任意整数时钟分频
+// --------------------------------------------------------------------
+module divide#(
+	parameter WIDTH = 3,  //计数器的位数，计数的最大值为 2**WIDTH-1
+	parameter N  = 3  //分频系数，请确保 N < 2**WIDTH-1，否则计数会溢出
+) (	
+	input clk,
+	input rst_n,
+	output clkout
+);
+  
+	reg 	[WIDTH-1:0]	cnt_p,cnt_n;     //cnt_p为上升沿触发时的计数器，cnt_n为下降沿触发时的计数器
+	reg			clk_p,clk_n;     //clk_p为上升沿触发时分频时钟，clk_n为下降沿触发时分频时钟
+ 
+	//上升沿触发时计数器的控制
+	always @ (posedge clk or negedge rst_n )         //posedge和negedge是verilog表示信号上升沿和下降沿
+                                                         //当clk上升沿来临或者rst_n变低的时候执行一次always里的语句
+		begin
+			if(!rst_n)
+				cnt_p<=0;
+			else if (cnt_p==(N-1))
+				cnt_p<=0;
+			else cnt_p<=cnt_p+1;             //计数器一直计数，当计数到N-1的时候清零，这是一个模N的计数器
+		end
+ 
+         //上升沿触发的分频时钟输出,如果N为奇数得到的时钟占空比不是50%；如果N为偶数得到的时钟占空比为50%
+         always @ (posedge clk or negedge rst_n)
+		begin
+			if(!rst_n)
+				clk_p<=0;
+			else if (cnt_p<(N>>1))          //N>>1表示右移一位，相当于除以2去掉余数
+				clk_p<=0;
+			else 
+				clk_p<=1;               //得到的分频时钟正周期比负周期多一个clk时钟
+		end
+ 
+        //下降沿触发时计数器的控制        	
+	always @ (negedge clk or negedge rst_n)
+		begin
+			if(!rst_n)
+				cnt_n<=0;
+			else if (cnt_n==(N-1))
+				cnt_n<=0;
+			else cnt_n<=cnt_n+1;
+		end
+ 
+        //下降沿触发的分频时钟输出，和clk_p相差半个时钟
+	always @ (negedge clk)
+		begin
+			if(!rst_n)
+				clk_n<=0;
+			else if (cnt_n<(N>>1))  
+				clk_n<=0;
+			else 
+				clk_n<=1;                //得到的分频时钟正周期比负周期多一个clk时钟
+		end
+ 
+        assign clkout = (N==1)?clk:(N[0])?(clk_p&clk_n):clk_p;      //条件判断表达式
+                                                                    //当N=1时，直接输出clk
+                                                                    //当N为偶数也就是N的最低位为0，N（0）=0，输出clk_p
+                                                                    //当N为奇数也就是N最低位为1，N（0）=1，输出clk_p&clk_n。正周期多所以是相与
+endmodule 
+EOF
+    echo "INFO：成功在路径$2下生成divide.v文件！"
+    exit 0
+fi
+
+#==============================================================================
+if [ "$1" == "-clean" ]  #当仿真参数是 -clear时删除sim文件夹下所有文件，包括仿真数据
+then
+    rm -rf ./sim/*  #清空sim文件夹下的内容
+    echo "note:clean success!"
+    exit 0
+fi
+
+if [ "$1" == "-f" ]  #运行单文件
+then 
+    if [ -f $2 ];then
+        clear
+        echo -e "\033[36m运行单文件verilog，如用于处理文件的文件，当前运行的是：$2\033[0m"
+        iverilog $2
+        vvp a.out
+        echo
+        rm -f a.out
+    else
+        echo "ERROR:文件$2不存在！"
+    fi
+
+    exit 0
+fi
+
+if [ "$1" == "-h" ]  #帮助
+then
+    echo "  Usage： run [para] <string>"
+    echo "  run -d dir      仿真dir目录"
+    echo "  run -i dir      在指定文件夹生成testbech模板，不存在路径则先创建路径"
+    echo "  run -f file     运行单.v文件分析"
+    echo "  run             仿真上次仿真的目录"
+    echo "  run -h          显示帮助"
+    echo "  run -r          刷新仿真数据，不在重新开启新的gtkwave"
+    echo "  run -clk dir    在指定文件夹生成任意分频器的模板divide.v，不存在路径则先创建路径"
+    echo "  run -hide       隐藏除了正在调试所有工程文件夹(module路径下的文件夹)"
+    echo "  run -unhide     显示所有隐藏的工程文件夹（module路径下的）"
+
+    exit 0
+fi
+
+if [ "$1" == "-d" ]  #指定要仿真的文件夹开始仿真
+then
+    DST_DIR=$2 
+    if [ ! -d $DST_DIR ];then
+        echo "ERROR:仿真目录不能存足，执行参数应为 run -d 需要仿真的目录"
+        exit 1
+    fi
+    stat=$(echo $(ls $DST_DIR | grep '.v'))
+    if [ "$stat" = "" ];then
+        echo "ERROR:文件路径第一层目录下没有任何可用于仿真的文件！"
+        exit 1
+    fi
+    echo "$DST_DIR" > db.dat #保存上次仿真路径
+fi
+
+DIR=$(cat db.dat)
+if [ ! -d $DIR ];then
+     echo "ERROR:仿真的目录不存在,执行参数应为 （run -d 需要仿真的目录） 以更新仿真数据记录"
+     exit 1
+fi
+if [ -f "$DIR/run.sh" ] ; then  #如果指定目录存在run.sh脚本，就执行run.sh脚本
+    ./$DIR/run.sh 
+    exit 0
+fi 
+
+echo -e "\033[36mINFO: 当前仿真的目录为 $DIR \033[0m"
+#检测到说明文件，显示说明文件中带有title:后面的内容做为功能说明
+README=$DIR/readme.md
+README=${README//\/\//\/}
+if [ -f "$README" ];then
+    nt=`awk -F':' '/title:/{print $2}' $README`
+    echo -e "\033[36mINFO: 项目说明(^_^) $nt \033[0m"
+fi
+
+rm -rf ./sim/*  #清空sim文件夹下的内容
+#为当前项目生成tags文件
+ctags -R $DIR
+#拷贝文件项目文件(.v)到仿真目录sim
+src=$(find $DIR -name "*.v")
+cp $src ./sim/
+
+#cp $DIR/*.v ./sim/
+
+#ln -s $DIR/*.v ./sim/
+
+#进入仿真文件所在的文件夹
+cd sim
+
+PARA=$(ls *.v)
+iverilog  -o wave $PARA #综合verilog代码
+vvp -n wave -lxt2  #仿真
+##下面根据运行脚本时传入的参数进行选择运行  
+if [ "$1" == "-r" ]  #当仿真参数是 -r时只更新数据，不在新开启gtkwave
+then
+    echo ""
+    echo "note:rebuild success!"
+    echo -e "\033[36mplease reload wave in gtkwave!\033[0m"
+    echo ""
+    exit 0
+fi
+
+gtkwave wave.lxt2 &> /dev/null & #显示波形
+echo 
+
+exit 0
